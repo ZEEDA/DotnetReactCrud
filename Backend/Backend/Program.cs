@@ -1,6 +1,10 @@
 var builder = WebApplication.CreateBuilder(args);
+
+// Services
+builder.Services.AddControllers();
 var app = builder.Build();
 
-app.MapGet("/", () => "Hello World!");
+// Middleware
+app.MapControllers();
 
 app.Run();
