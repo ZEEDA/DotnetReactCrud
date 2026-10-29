@@ -267,3 +267,276 @@ dotnet ef database update
 ```
 
 This creates the `Person.db` SQLite file with the `People` table. Do not edit the migration files by hand. When the model changes, add a new migration and run `database update` again.
+
+---
+
+## 6. Implement the CRUD Endpoints
+
+**File edited:** `Backend/Backend/Controllers/PeopleController.cs`
+
+### 6.1 Plan the routes
+
+| Method | Route              | Body     | Action                |
+|--------|--------------------|----------|-----------------------|
+| POST   | `/api/people`      | `Person` | Create a person       |
+| GET    | `/api/people`      | –        | List all people       |
+| GET    | `/api/people/{id}` | –        | Get one person by id  |
+| PUT    | `/api/people/{id}` | `Person` | Update a person       |
+| DELETE | `/api/people/{id}` | –        | Delete a person       |
+
+### 6.2 Inject the database context
+
+Ask for `AppDbContext` in the constructor. The DI container supplies it because it was registered in step 5.4.
+
+```csharp
+using Backend.Models;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace Backend.Controllers;
+
+[Route("api/[controller]")]
+[ApiController]
+public class PeopleController : ControllerBase
+{
+    private readonly AppDbContext _context;
+
+    public PeopleController(AppDbContext context)
+    {
+        _context = context;
+    }
+}
+```
+
+Every action below follows the same pattern: do the work inside `try`, and on any exception return `500 Internal Server Error` with the exception message.
+
+### 6.3 Create – `POST /api/people`
+
+Add the person, save, then return `201 Created` with a `Location` header pointing to the new resource. `CreatedAtRoute` builds that URL from the route named `"GetPerson"` (defined in 6.5).
+
+```csharp
+[HttpPost]
+public async Task<IActionResult> AddPerson(Person person)
+{
+    try
+    {
+        _context.People.Add(person);
+        await _context.SaveChangesAsync();
+        return CreatedAtRoute("GetPerson", new { id = person.Id }, person);
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(StatusCodes.Status500InternalServerError, ex.Message);
+    }
+}
+```
+
+### 6.4 Read all – `GET /api/people`
+
+```csharp
+[HttpGet]
+public async Task<IActionResult> GetPeople()
+{
+    try
+    {
+        var people = await _context.People.ToListAsync();
+        return Ok(people);
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(StatusCodes.Status500InternalServerError, ex.Message);
+    }
+}
+```
+
+### 6.5 Read one – `GET /api/people/{id}`
+
+- `{id:int}` is a route constraint, so only integer ids match.
+- `Name = "GetPerson"` names the route so `CreatedAtRoute` in 6.3 can link to it.
+- Return `404 Not Found` when no row has that id.
+
+```csharp
+[HttpGet("{id:int}", Name = "GetPerson")]
+public async Task<IActionResult> GetPerson(int id)
+{
+    try
+    {
+        var person = await _context.People.FindAsync(id);
+        if (person is null)
+        {
+            return NotFound();
+        }
+        return Ok(person);
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(StatusCodes.Status500InternalServerError, ex.Message);
+    }
+}
+```
+
+### 6.6 Update – `PUT /api/people/{id}`
+
+1. Return `400 Bad Request` if the id in the URL differs from the id in the body.
+2. Return `404 Not Found` if the person does not exist.
+3. Otherwise update, save, and return `204 No Content`.
+
+```csharp
+[HttpPut("{id:int}")]
+public async Task<IActionResult> UpdatePerson(int id, [FromBody] Person person)
+{
+    try
+    {
+        if (id != person.Id)
+        {
+            return BadRequest("The ID in the URL does not match the ID in the body.");
+        }
+
+        if (!await _context.People.AnyAsync(p => p.Id == id))
+        {
+            return NotFound();
+        }
+
+        _context.People.Update(person);
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(StatusCodes.Status500InternalServerError, ex.Message);
+    }
+}
+```
+
+### 6.7 Delete – `DELETE /api/people/{id}`
+
+Find the person, return `404` if missing, otherwise remove, save, and return `204 No Content`.
+
+```csharp
+[HttpDelete("{id:int}")]
+public async Task<IActionResult> DeletePerson(int id)
+{
+    try
+    {
+        var person = await _context.People.FindAsync(id);
+
+        if (person is null)
+        {
+            return NotFound();
+        }
+
+        _context.People.Remove(person);
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(StatusCodes.Status500InternalServerError, ex.Message);
+    }
+}
+```
+
+---
+
+## 7. Test the API with an `.http` File
+
+**File added:** `Backend/Backend/person.http`
+
+### 7.1 Write the requests
+
+An `.http` file lets you send requests straight from the editor (VS Code REST Client extension or Visual Studio). Requests are separated by `###`.
+
+```http
+@base_address = http://localhost:3000/api/people
+
+POST {{base_address}}
+Content-Type: application/json
+
+{
+    "firstName": "Joana",
+    "lastName": "Doe"
+}
+
+###
+GET {{base_address}}
+
+###
+GET {{base_address}}/1
+
+###
+PUT {{base_address}}/4
+Content-Type: application/json
+
+{
+    "id": 4,
+    "firstName": "Mahmoud",
+    "lastName": "Ali"
+}
+
+###
+DELETE {{base_address}}/2
+```
+
+### 7.2 Send the requests
+
+1. Start the API: `dotnet run` from `Backend/Backend`.
+2. Click **Send Request** above each request in the `.http` file.
+3. Check the status codes: `201` for POST, `200` for GET, `204` for PUT and DELETE, and `404` for an id that does not exist.
+
+### 7.3 Common mistakes that cause `400 Bad Request`
+
+With `[ApiController]`, a body that can't be parsed or fails validation is rejected with `400` **before** the action runs, so no breakpoint inside the action is hit.
+
+- **Trailing comma in JSON.** `"lastName": "Doe",` before `}` is invalid JSON, and System.Text.Json rejects it.
+- **Wrong variable syntax.** Declare a variable with `@name = value` and use it as `{{name}}`. Writing `{{@name}}` does not work.
+- **Missing required fields.** Leaving out `firstName` or `lastName`, or using more than 30 characters, fails the `[Required]`/`[MaxLength(30)]` validation.
+- **Missing header.** Requests with a body need `Content-Type: application/json`.
+
+Read the response body. It is a `ValidationProblem` JSON object that names the field and the error.
+
+---
+
+## 8. Enable CORS for the React Frontend
+
+**File edited:** `Backend/Backend/Program.cs`
+
+The React dev server (Vite) runs on `http://localhost:5173`, which is a different origin from the API on port `3000`. Browsers block those cross-origin requests unless the API allows them through CORS.
+
+### 8.1 Define a named CORS policy
+
+Allow the frontend origin with any HTTP method and header:
+
+```csharp
+var MyAllowSpecificOrigins = "_myAllowSpecificOrigins";
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(
+        name: MyAllowSpecificOrigins,
+        policy =>
+        {
+            policy.WithOrigins("http://localhost:5173")
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+        }
+    );
+});
+```
+
+### 8.2 Apply the policy in the pipeline
+
+Call `UseCors` after `Build()` and **before** `MapControllers()`, so the CORS headers are added to controller responses:
+
+```csharp
+var app = builder.Build();
+app.UseCors(MyAllowSpecificOrigins);
+
+// Middleware
+app.MapControllers();
+
+app.Run();
+```
+
+CORS only applies to browsers. Requests from the `.http` file or tools like Postman work either way.
