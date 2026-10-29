@@ -151,3 +151,119 @@ dotnet run
 ```
 
 The API is now listening on `http://localhost:3000`.
+
+---
+
+## 5. Add the Database with Entity Framework Core (SQLite)
+
+### 5.1 Install the EF Core NuGet packages
+
+**File edited:** `Backend/Backend/Backend.csproj`
+
+From the `Backend/Backend` folder, add the SQLite provider and the design-time package (needed for migrations):
+
+```bash
+dotnet add package Microsoft.EntityFrameworkCore.Sqlite
+dotnet add package Microsoft.EntityFrameworkCore.Design
+```
+
+This adds the following references to the project file:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14">
+    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    <PrivateAssets>all</PrivateAssets>
+  </PackageReference>
+  <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" />
+</ItemGroup>
+```
+
+### 5.2 Add the connection string
+
+**Files edited:** `Backend/Backend/appsettings.json` and `Backend/Backend/appsettings.Development.json`
+
+Add a `ConnectionStrings` section at the top of both files. SQLite stores the whole database in a single file, here `Person.db`:
+
+```json
+"ConnectionStrings": {
+  "DefaultConnection": "Data Source=Person.db"
+},
+```
+
+### 5.3 Create the database context
+
+**File added:** `Backend/Backend/Models/AppDbContext.cs`
+
+The `DbContext` is the bridge between the C# models and the database. Each `DbSet<T>` property becomes a table, so `People` maps to a `People` table of `Person` rows.
+
+```csharp
+using Microsoft.EntityFrameworkCore;
+
+namespace Backend.Models;
+
+public class AppDbContext : DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
+    {
+    }
+
+    public DbSet<Person> People { get; set; }
+}
+```
+
+### 5.4 Register the database context
+
+**File edited:** `Backend/Backend/Program.cs`
+
+Read the connection string from configuration (fail fast if it is missing), then register `AppDbContext` with dependency injection so controllers can receive it in their constructors:
+
+```csharp
+using Backend.Models;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Services
+builder.Services.AddControllers();
+
+string connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new ArgumentNullException("ConnectionString is null");
+
+builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString));
+
+var app = builder.Build();
+
+// Middleware
+app.MapControllers();
+
+app.Run();
+```
+
+### 5.5 Install the EF Core CLI tool (once per machine)
+
+```bash
+dotnet tool install --global dotnet-ef
+```
+
+### 5.6 Create the first migration
+
+**Files added:** `Backend/Backend/Migrations/`
+- `<timestamp>_InitialCreate.cs` – the `Up()` method creates the `People` table and `Down()` drops it.
+- `<timestamp>_InitialCreate.Designer.cs` – migration metadata (auto-generated).
+- `AppDbContextModelSnapshot.cs` – a snapshot of the current model, used to work out the next migration.
+
+```bash
+dotnet ef migrations add InitialCreate
+```
+
+The generated table follows the model's annotations: `Id` becomes an auto-increment primary key, and `FirstName`/`LastName` become required `TEXT` columns with a max length of 30.
+
+### 5.7 Apply the migration to create the database
+
+**File added:** `Backend/Backend/Person.db`
+
+```bash
+dotnet ef database update
+```
+
+This creates the `Person.db` SQLite file with the `People` table. Do not edit the migration files by hand. When the model changes, add a new migration and run `database update` again.
